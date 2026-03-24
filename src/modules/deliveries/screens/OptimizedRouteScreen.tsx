@@ -20,6 +20,70 @@ type Stop = {
 
 const driverOrigin = { lat: 12.9716, lng: 77.5946 };
 const MAPS_ENABLED = true;
+type Coordinate = { latitude: number; longitude: number };
+
+function buildOsrmRouteUrl(points: Coordinate[]): string {
+  const encoded = points.map(point => `${point.longitude},${point.latitude}`).join(';');
+  return `https://router.project-osrm.org/route/v1/driving/${encoded}?overview=full&geometries=geojson`;
+}
+
+async function fetchRoadRoute(points: Coordinate[]): Promise<Coordinate[] | null> {
+  if (points.length < 2) {
+    return points;
+  }
+
+  try {
+    const response = await fetch(buildOsrmRouteUrl(points));
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = (await response.json()) as {
+      routes?: Array<{ geometry?: { coordinates?: number[][] } }>;
+    };
+    const geometry = payload.routes?.[0]?.geometry?.coordinates;
+    if (!geometry?.length) {
+      return null;
+    }
+
+    return geometry
+      .filter(point => Array.isArray(point) && point.length >= 2)
+      .map(([longitude, latitude]) => ({ latitude, longitude }));
+  } catch {
+    return null;
+  }
+}
+
+function distanceScore(from: { lat: number; lng: number }, to: { lat: number; lng: number }): number {
+  const lat = from.lat - to.lat;
+  const lng = from.lng - to.lng;
+  return lat * lat + lng * lng;
+}
+
+function buildLongRouteOrder(start: { lat: number; lng: number }, routeStops: Stop[]): Stop[] {
+  const remaining = [...routeStops];
+  const ordered: Stop[] = [];
+  let cursor = { ...start };
+
+  while (remaining.length) {
+    let farthestIdx = 0;
+    let farthestScore = Number.NEGATIVE_INFINITY;
+
+    remaining.forEach((candidate, idx) => {
+      const score = distanceScore(cursor, candidate);
+      if (score > farthestScore) {
+        farthestScore = score;
+        farthestIdx = idx;
+      }
+    });
+
+    const selected = remaining.splice(farthestIdx, 1)[0];
+    ordered.push(selected);
+    cursor = { lat: selected.lat, lng: selected.lng };
+  }
+
+  return ordered;
+}
 
 export function OptimizedRouteScreen() {
   const user = useAuthStore(state => state.user);
@@ -27,6 +91,7 @@ export function OptimizedRouteScreen() {
   const [loading, setLoading] = useState(false);
   const [routeStart, setRouteStart] = useState(driverOrigin);
   const [isOptimized, setIsOptimized] = useState(false);
+  const [roadCoordinates, setRoadCoordinates] = useState<Coordinate[]>([]);
 
   const fetchPendingStops = (): Promise<Stop[]> =>
     new Promise((resolve, reject) => {
@@ -71,20 +136,19 @@ export function OptimizedRouteScreen() {
     const stopById = new Map(routeStops.map(stop => [stop.id, stop]));
     const legByStopId = new Map((optimizedData.legs ?? []).map(leg => [leg.stopId, leg]));
 
-    const ordered = optimizedData.orderedStopIds
-      .map(id => {
-        const stop = stopById.get(id);
-        if (!stop) {
-          return null;
-        }
-        const leg = legByStopId.get(id);
-        return {
-          ...stop,
-          etaMinutes: leg?.durationMinutes,
-          trafficMultiplier: leg?.trafficMultiplier,
-        };
-      })
-      .filter((stop): stop is Stop => Boolean(stop));
+    const ordered = optimizedData.orderedStopIds.reduce<Stop[]>((acc, id) => {
+      const stop = stopById.get(id);
+      if (!stop) {
+        return acc;
+      }
+      const leg = legByStopId.get(id);
+      acc.push({
+        ...stop,
+        etaMinutes: leg?.durationMinutes,
+        trafficMultiplier: leg?.trafficMultiplier,
+      });
+      return acc;
+    }, []);
 
     setStops(ordered);
   };
@@ -101,10 +165,16 @@ export function OptimizedRouteScreen() {
         setStops([]);
         setRouteStart(driverOrigin);
         setIsOptimized(false);
+        setRoadCoordinates([]);
         return;
       }
-      const optimized = await deliveryService.optimizeRoute(routeStart, routeStops);
-      applyOptimizationResult(routeStops, optimized?.data);
+      const optimized = (await deliveryService.optimizeRoute(routeStart, routeStops)) as {
+        data?: {
+          orderedStopIds?: string[];
+          legs?: Array<{ stopId: string; durationMinutes: number; trafficMultiplier: number }>;
+        };
+      };
+      applyOptimizationResult(routeStops, optimized.data);
       setIsOptimized(true);
     } catch (error) {
       Alert.alert('Route optimization failed', (error as Error).message);
@@ -125,6 +195,7 @@ export function OptimizedRouteScreen() {
         setStops(routeStops);
         setRouteStart(driverOrigin);
         setIsOptimized(false);
+        setRoadCoordinates([]);
       } catch (error) {
         if (!cancelled) {
           Alert.alert('Route error', (error as Error).message);
@@ -150,19 +221,60 @@ export function OptimizedRouteScreen() {
       setRouteStart(nextOrigin);
       if (!isOptimized) {
         setStops(nextStops);
+        setRoadCoordinates([]);
         return;
       }
-      const optimized = await deliveryService.optimizeRoute(nextOrigin, nextStops);
-      applyOptimizationResult(nextStops, optimized?.data);
+      const optimized = (await deliveryService.optimizeRoute(nextOrigin, nextStops)) as {
+        data?: {
+          orderedStopIds?: string[];
+          legs?: Array<{ stopId: string; durationMinutes: number; trafficMultiplier: number }>;
+        };
+      };
+      applyOptimizationResult(nextStops, optimized.data);
     } catch (error) {
       Alert.alert('Update failed', (error as Error).message);
     }
   };
 
+  const displayedStops = isOptimized ? stops : buildLongRouteOrder(routeStart, stops);
   const routeCoordinates = [
     { latitude: routeStart.lat, longitude: routeStart.lng },
-    ...stops.map(stop => ({ latitude: stop.lat, longitude: stop.lng })),
+    ...displayedStops.map(stop => ({ latitude: stop.lat, longitude: stop.lng })),
   ];
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrateRoadPolyline = async () => {
+      if (routeCoordinates.length < 2) {
+        if (!cancelled) {
+          setRoadCoordinates([]);
+        }
+        return;
+      }
+
+      const fetched = await fetchRoadRoute(routeCoordinates);
+      if (cancelled) {
+        return;
+      }
+
+      if (fetched && fetched.length >= 2) {
+        setRoadCoordinates(fetched);
+      } else {
+        setRoadCoordinates(routeCoordinates);
+      }
+    };
+
+    hydrateRoadPolyline().catch(() => {
+      if (!cancelled) {
+        setRoadCoordinates(routeCoordinates);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOptimized, routeStart.lat, routeStart.lng, stops]);
 
   return (
     <View style={styles.container}>
@@ -190,8 +302,12 @@ export function OptimizedRouteScreen() {
               description={stop.status ?? 'pending'}
             />
           ))}
-          {isOptimized && routeCoordinates.length >= 2 ? (
-            <Polyline coordinates={routeCoordinates} strokeWidth={4} strokeColor="#2563eb" />
+          {roadCoordinates.length >= 2 || routeCoordinates.length >= 2 ? (
+            <Polyline
+              coordinates={roadCoordinates.length >= 2 ? roadCoordinates : routeCoordinates}
+              strokeWidth={4}
+              strokeColor="#2563eb"
+            />
           ) : null}
         </MapView>
       ) : (
@@ -208,7 +324,7 @@ export function OptimizedRouteScreen() {
       </View>
 
       <ScrollView style={styles.list}>
-        {stops.map((stop, index) => (
+        {displayedStops.map((stop, index) => (
           <View key={stop.id} style={styles.stopItem}>
             <Text style={styles.stopText}>
               {index + 1}. {stop.label}
