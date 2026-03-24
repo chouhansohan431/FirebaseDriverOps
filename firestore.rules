@@ -1,0 +1,76 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function allowedOrderStatuses() {
+      return ['pending', 'accepted', 'on_the_way', 'delivered'];
+    }
+
+    function hasRequiredOrderShape(data) {
+      return data.keys().hasOnly([
+        'assignedDriverId',
+        'orderId',
+        'customerName',
+        'address',
+        'status',
+        'location',
+        'updatedAt'
+      ])
+      && data.assignedDriverId is string
+      && data.assignedDriverId.size() > 0
+      && data.orderId is string
+      && data.orderId.size() > 0
+      && data.customerName is string
+      && data.customerName.size() > 0
+      && data.address is string
+      && data.address.size() > 0
+      && data.status is string
+      && data.status in allowedOrderStatuses()
+      && data.location is map
+      && data.location.keys().hasOnly(['lat', 'lng'])
+      && data.location.lat is number
+      && data.location.lng is number;
+    }
+
+    function isOrderCreateValid() {
+      return hasRequiredOrderShape(request.resource.data)
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function isOrderUpdateValid() {
+      return hasRequiredOrderShape(request.resource.data)
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.assignedDriverId == resource.data.assignedDriverId
+        && request.resource.data.orderId == resource.data.orderId
+        && request.resource.data.customerName == resource.data.customerName
+        && request.resource.data.address == resource.data.address
+        && request.resource.data.location == resource.data.location;
+    }
+
+    match /users/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+
+    match /orders/{orderId} {
+      allow read: if isSignedIn() && resource.data.assignedDriverId == request.auth.uid;
+      allow create: if isSignedIn()
+        && request.resource.data.assignedDriverId == request.auth.uid
+        && isOrderCreateValid();
+      allow update: if isSignedIn()
+        && resource.data.assignedDriverId == request.auth.uid
+        && request.resource.data.assignedDriverId == request.auth.uid
+        && isOrderUpdateValid();
+      allow delete: if false;
+    }
+
+    match /deliveries/{deliveryId} {
+      allow read: if isSignedIn() && resource.data.assignedDriverId == request.auth.uid;
+      allow update: if isSignedIn()
+        && resource.data.assignedDriverId == request.auth.uid
+        && request.resource.data.status in ['pending', 'delivered'];
+    }
+  }
+}

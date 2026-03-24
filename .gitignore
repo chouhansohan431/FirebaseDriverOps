@@ -40,6 +40,9 @@ local.properties
 node_modules/
 npm-debug.log
 yarn-error.log
+.env
+.env.*
+!.env.example
 
 # fastlane
 #
@@ -73,3 +76,29 @@ yarn-error.log
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# Firebase / secret config files
+android/app/google-services.json
+ios/**/GoogleService-Info.plist
+
+# Local gradle secrets
+android/gradle.properties
+
+# Private keys / credentials
+*.pem
+*.p12
+*.pfx
+*.jks
+*.key
+*.crt
+*.cer
+serviceAccountKey.json
+firebase-adminsdk-*.json
+google-credentials.json
+credentials.json
+
+# Optional local override files
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local

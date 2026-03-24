@@ -1,97 +1,133 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# Driver Delivery App (React Native + Firebase)
 
-# Getting Started
+Production-style Driver Delivery application built with React Native and Firebase, with end-to-end flows for auth, deliveries, route optimization, and notifications.
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+## Features implemented
 
-## Step 1: Start Metro
+- Email/password authentication with Firebase Auth
+- Separate `Sign up` and `Login` screens
+- Phone verification step after account creation/login
+- Dummy OTP mode enabled for demo stability:
+  - Dummy phone number: `1234567890`
+  - Dummy OTP: `123456`
+- Bottom tab navigation:
+  - `Pending Orders`
+  - `Delivered Orders`
+  - `Profile`
+- Route screen with map markers + route optimization + re-optimization after delivery
+- FCM token registration and push handling in foreground, background, and killed states
+- Navigation from notification tap into app main flow
 
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
+## OTP note (important for reviewers)
 
-To start the Metro dev server, run the following command from the root of your React Native project:
+Firebase Phone Auth may require billing (Blaze) and additional phone auth setup for real OTP delivery.  
+For predictable demo behavior, this project currently uses dummy phone OTP verification in-app.
+
+- Current demo verification:
+  - Phone: `1234567890`
+  - OTP: `123456`
+
+The service still contains real phone auth methods, but active screen flow is configured for dummy OTP.
+
+## Setup
+
+### 1) Install dependencies
 
 ```sh
-# Using npm
-npm start
-
-# OR using Yarn
-yarn start
+npm install
 ```
 
-## Step 2: Build and run your app
-
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
-
-### Android
+### 2) iOS pods (if running iOS)
 
 ```sh
-# Using npm
+cd ios && bundle exec pod install && cd ..
+```
+
+### 3) Firebase native config
+
+- Place `google-services.json` in `android/app/`
+- Place `GoogleService-Info.plist` in `ios/firebaseTask/`
+- Enable `Email/Password` auth in Firebase Console
+- Keep these files local only (do not commit)
+
+### 4) Local environment and secrets
+
+- Copy `.env.example` to `.env`
+- Fill required values
+- Copy `android/gradle.properties.example` to `android/gradle.properties`
+- Set `GOOGLE_MAPS_API_KEY` in `android/gradle.properties`
+
+Secrets are ignored by git via `.gitignore`:
+- `.env*` (except `.env.example`)
+- `android/app/google-services.json`
+- `ios/**/GoogleService-Info.plist`
+- `android/gradle.properties`
+- key/cert files (`*.jks`, `*.pem`, etc.)
+
+### 5) Firestore rules/indexes and functions
+
+```sh
+firebase deploy --only firestore:rules,firestore:indexes
+cd functions
+npm install
+firebase deploy --only functions
+cd ..
+```
+
+### 6) Run app
+
+```sh
+npm run start
 npm run android
-
-# OR using Yarn
-yarn android
-```
-
-### iOS
-
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
-
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
-
-```sh
-bundle install
-```
-
-Then, and every time you update your native dependencies, run:
-
-```sh
-bundle exec pod install
-```
-
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
-
-```sh
-# Using npm
+# or
 npm run ios
-
-# OR using Yarn
-yarn ios
 ```
 
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
+## App flow
 
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
+1. User can create account from `Sign up` (name, email, phone, password)
+2. User verifies OTP (dummy mode)
+3. App opens `Pending Orders` tab
+4. User can move to `Delivered Orders` and `Profile` from bottom tabs
+5. Route screen is available from pending tab (`View Route`)
 
-## Step 3: Modify your app
+## Notification behavior
 
-Now that you have successfully run the app, let's make changes!
+Notifications are handled in all app states:
 
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
+- Foreground: in-app alert + local notification
+- Background: system notification and tap handling
+- Killed state: app launch from notification tap and route handling
 
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
+## How to trigger a test notification
 
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
+1. Log in once on device/emulator so FCM token is saved in `users/{uid}.fcmTokens`.
+2. Copy the logged-in Firebase `uid`.
+3. Create a document in Firestore `deliveries` collection with that `assignedDriverId`.
 
-## Congratulations! :tada:
+Example document:
 
-You've successfully run and modified your React Native App. :partying_face:
+```json
+{
+  "assignedDriverId": "YOUR_DRIVER_UID",
+  "orderId": "ORD-1001",
+  "customerName": "Test Customer",
+  "address": "Test Address",
+  "status": "pending",
+  "location": { "lat": 12.9716, "lng": 77.5946 },
+  "updatedAt": "serverTimestamp"
+}
+```
 
-### Now what?
+4. Cloud Function `onDeliveryAssigned` sends push to assigned driver tokens.
+5. Tap notification to open app and continue in main delivery flow.
 
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
+## Project structure
 
-# Troubleshooting
-
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
-
-# Learn More
-
-To learn more about React Native, take a look at the following resources:
-
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+- `src/app/` navigation and app root
+- `src/modules/auth/` login/signup/verification/profile screens
+- `src/modules/deliveries/` pending, delivered, route screens
+- `src/services/` Firebase/auth/delivery/notification services
+- `src/store/` Zustand auth state
+- `src/theme/` colors and responsive tokens
+- `functions/src/` Firebase Cloud Functions
